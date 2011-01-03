@@ -9,12 +9,16 @@
 # artist.getsimilar&artist=artist&limit=20&api_key=key
 
 use strict;
+no strict "refs";
 use warnings;
 
 use XML::Simple;
 use LWP::Simple;
 use Audio::MPD;
 
+$| = 42;
+
+my $SIZE        = 100;
 my $KEY         = 'api key goes here';
 my $TRACK_URL   = 'http://ws.audioscrobbler.com/2.0/?method=track.getsimilar';
 my $ARTIST_URL  = 'http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar';
@@ -31,27 +35,63 @@ my $mpd = Audio::MPD->new(host      =>  $MPD_HOST,
                           port      =>  $MPD_PORT,
                           password  =>  $MPD_PASS);
 
-my $song    = $mpd->current;
-my $artist  = $$song{artist};
-my $track   = $$song{title};
+# playlist hash holds the playlist, we can easily check for collisions when
+# adding new tracks. the similar hash will hold the results found from looking
+# for similar tracks to reduce the lookup time while building the playlist.
+my %PLAYLIST    = ();
+my %SIMILAR     = ();
 
-print "finding songs similar to $artist - $track...\n";
+my $current     = $mpd->current;
 
-# array of similar songs we have on hand
-my @songs = ();
-# we have an API key, we can find similar tracks, not just artists!
-@songs = get_similar_tracks($artist,$track,$T_LIMIT,$KEY,$mpd) if ($KEY ne '');
+$PLAYLIST{$$current{file}} = 1;
 
-# find songs using only similar artist if the search for
-# similar tracks yeilded no results.
-@songs = get_similar_artists($artist,$A_LIMIT,$KEY,$mpd) if (@songs == 0);
+while ($SIZE >= scalar(keys %PLAYLIST)) {
+    my @playlist = keys %PLAYLIST;
+    fisher_yates_shuffle(\@playlist);
+    my $file = pop(@playlist);
+    
+    my $song = $mpd->collection->song($file);
+    my $artist  = $$song{artist};
+    my $track   = $$song{title};
 
-fisher_yates_shuffle(\@songs);
-foreach my $song (@songs) {
-    print "$song\n";
+    print "similar to $artist - $track...\n";
+
+    my @songs = ();
+    @songs = @{$SIMILAR{$file}} if ($SIMILAR{$file});
+    if (@songs == 0) {
+        # we have an API key, we can find similar tracks, not just artists!
+        @songs = get_sim_tracks($artist,$track,$T_LIMIT,$KEY,$mpd) if ($KEY);
+
+        # find songs using only similar artist if the search for
+        # similar tracks yeilded no results.
+        @songs = get_sim_artists($artist,$A_LIMIT,$KEY,$mpd) if (@songs == 0);
+    }
+    $SIMILAR{$file} = \@songs;
+
+    fisher_yates_shuffle(\@songs);
+    
+    # i'm debating whether or not to /make/ a song get added to the playlist
+    # right now, we just set the hash key to 1, so if the song was already
+    # on the playlist, oh well. this has the advantage of us not getting stuck
+    # in an infinite loop when there aren't enough songs to add, or if they all
+    # already exist on the playlist.
+    my $new_song = pop(@songs);
+    my $info = $mpd->collection->song($new_song);
+    my $new_artist = $$info{artist};
+    my $new_title  = $$info{title};
+    print "\t...$new_artist - $new_title\n";
+    $PLAYLIST{$new_song} = 1;
 }
 
-sub get_similar_tracks {
+print "playlist:\n";
+foreach my $file (keys %PLAYLIST) {
+    my $info = $mpd->collection->song($file);
+    my $artist = $$info{artist};
+    my $title  = $$info{title};
+    print "\t$artist - $title\n";
+}
+
+sub get_sim_tracks {
     my $artist  =   shift;
     my $track   =   shift;
     my $limit   =   shift;
@@ -82,7 +122,7 @@ sub get_similar_tracks {
     return map($_->file,@finds);
 }
 
-sub get_similar_artists {
+sub get_sim_artists {
     my $artist  =   shift;
     my $limit   =   shift;
     my $key     =   shift;
