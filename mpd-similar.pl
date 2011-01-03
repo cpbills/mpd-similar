@@ -19,6 +19,8 @@ use Audio::MPD;
 $| = 42;
 
 my $SIZE        = 100;
+my $CROP        = 0;
+my $CLEAR       = 0;
 my $KEY         = 'api key goes here';
 my $TRACK_URL   = 'http://ws.audioscrobbler.com/2.0/?method=track.getsimilar';
 my $ARTIST_URL  = 'http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar';
@@ -85,7 +87,14 @@ while ($SIZE >= scalar(keys %PLAYLIST)) {
     $PLAYLIST{$new_song} = 1;
 }
 
-$mpd->playlist->clear;
+delete $PLAYLIST{$$current{file}} unless ($CLEAR);
+
+if ($CROP) {
+    $mpd->playlist->crop;
+} elsif ($CLEAR) {
+    $mpd->playlist->clear;
+}
+
 print "playlist:\n";
 my @files = keys %PLAYLIST;
 fisher_yates_shuffle(\@files);
@@ -96,8 +105,8 @@ foreach my $file (@files) {
     my $title  = $$info{title};
     print "\t$artist - $title\n";
 }
-$mpd->playlist->shuffle;
-$mpd->play;
+
+$mpd->play if ($CLEAR);
 
 sub get_sim_tracks {
     my $artist  =   shift;
