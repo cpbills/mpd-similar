@@ -47,6 +47,17 @@ my %SIMILAR     = ();
 
 my $current     = $mpd->current;
 
+unless ($CLEAR or $CROP) {
+    my @old_songs = $mpd->playlist->as_items;
+    if ($SIZE < @old_songs) {
+        print "there are already $SIZE or more songs in the playlist\n";
+        exit;
+    }
+    foreach my $song (@old_songs) {
+        $PLAYLIST{$$song{file}} = 1;
+    }
+}
+
 $PLAYLIST{$$current{file}} = 1;
 
 while ($SIZE >= scalar(keys %PLAYLIST)) {
@@ -74,17 +85,17 @@ while ($SIZE >= scalar(keys %PLAYLIST)) {
 
     fisher_yates_shuffle(\@songs);
     
-    # i'm debating whether or not to /make/ a song get added to the playlist
-    # right now, we just set the hash key to 1, so if the song was already
-    # on the playlist, oh well. this has the advantage of us not getting stuck
-    # in an infinite loop when there aren't enough songs to add, or if they all
-    # already exist on the playlist.
-    my $new_song = pop(@songs);
-    my $info = $mpd->collection->song($new_song);
-    my $new_artist = $$info{artist};
-    my $new_title  = $$info{title};
-    print "\t...$new_artist - $new_title\n";
-    $PLAYLIST{$new_song} = 1;
+    my $new_one = 0;
+    while (@songs and $new_one == 0) {
+        my $new_song = pop(@songs);
+        $new_one = 1 unless $PLAYLIST{$new_song};
+        $PLAYLIST{$new_song} = 1;
+
+        my $info = $mpd->collection->song($new_song);
+        my $new_artist = $$info{artist};
+        my $new_title  = $$info{title};
+        print "\t...$new_artist - $new_title\n";
+    }
 }
 
 delete $PLAYLIST{$$current{file}} unless ($CLEAR);
@@ -93,6 +104,11 @@ if ($CROP) {
     $mpd->playlist->crop;
 } elsif ($CLEAR) {
     $mpd->playlist->clear;
+} else {
+    my @old_songs = $mpd->playlist->as_items;
+    foreach my $song (@old_songs) {
+        delete $PLAYLIST{$$song{file}};
+    }
 }
 
 print "playlist:\n";
