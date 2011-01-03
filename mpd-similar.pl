@@ -23,13 +23,15 @@ my $KEY         = 'api key goes here';
 my $TRACK_URL   = 'http://ws.audioscrobbler.com/2.0/?method=track.getsimilar';
 my $ARTIST_URL  = 'http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar';
 my $ARTIST_ALT  = 'http://ws.audioscrobbler.com/2.0/artist/ARTIST/similar.txt';
-my $T_LIMIT     = 100;
-my $A_LIMIT     = 30;
+my $T_LIMIT     = 50;
+my $A_LIMIT     = 20;
 my $DELIMITER   = '';
 
 my $MPD_HOST    = 'localhost';
 my $MPD_PORT    = '6600';
 my $MPD_PASS    = '';
+
+$SIZE = $ARGV[0] if ($ARGV[0] =~ /[0-9]+/);
 
 my $mpd = Audio::MPD->new(host      =>  $MPD_HOST,
                           port      =>  $MPD_PORT,
@@ -83,13 +85,19 @@ while ($SIZE >= scalar(keys %PLAYLIST)) {
     $PLAYLIST{$new_song} = 1;
 }
 
+$mpd->playlist->clear;
 print "playlist:\n";
-foreach my $file (keys %PLAYLIST) {
+my @files = keys %PLAYLIST;
+fisher_yates_shuffle(\@files);
+foreach my $file (@files) {
     my $info = $mpd->collection->song($file);
+    $mpd->playlist->add($file);
     my $artist = $$info{artist};
     my $title  = $$info{title};
     print "\t$artist - $title\n";
 }
+$mpd->playlist->shuffle;
+$mpd->play;
 
 sub get_sim_tracks {
     my $artist  =   shift;
