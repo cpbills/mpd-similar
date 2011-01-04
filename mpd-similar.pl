@@ -132,9 +132,13 @@ sub get_sim_tracks {
     my $strack  = uri_escape($track);
     my $params = "&artist=$sartist&track=$strack&limit=$limit&api_key=$key";
 
+    my $content = get("$TRACK_URL$params");
+    unless (defined $content) {
+        print "failed to get: $TRACK_URL$params\n";
+        return undef;
+    }
     my $xml = new XML::Simple;
-    print "$TRACK_URL$params\n";
-    my $results = $xml->XMLin(get("$TRACK_URL$params"));
+    my $results = $xml->XMLin($content);
 
     my @similar = ();
     if ($$results{status} eq 'ok') {
@@ -174,9 +178,13 @@ sub get_sim_artists {
 
     if ($key and $key ne '') {
         my $params = "&artist=$sartist&limit=$limit&api_key=$key";
+        my $content = get("$ARTIST_URL$params");
+        unless (defined $content) {
+            print "failed to get: $ARTIST_URL$params\n";
+            return undef;
+        }
         my $xml = new XML::Simple;
-        my $results = $xml->XMLin(get("$ARTIST_URL$params"));
-        
+        my $results = $xml->XMLin($content);
         if ($$results{status} eq 'ok') {
             foreach my $s_artist (@{$$results{similarartists}{artist}}) {
                 push(@similar,$$s_artist{name}) if (ref $s_artist eq 'HASH');
@@ -185,13 +193,16 @@ sub get_sim_artists {
     } else {
         my $url = $ARTIST_ALT;
         $url =~ s/ARTIST/$sartist/;
-        my @lines = split(/\n/,get($url));
-
+        my $content = get($url);
+        unless (defined $content) {
+            print "failed to get: $url\n";
+            return undef;
+        }
         # map basically generates an array by applying the 'split' to each
-        # item of @lines, it's a 'slick' way to do a foreach loop, without
+        # line of $content, it's a 'slick' way to do a foreach loop, without
         # the loop. this is mostly a note for myself, because i don't use
         # map too often, and i wanted to be clever...
-        @similar = map((split(/,/,$_))[2],@lines);
+        @similar = map((split(/,/,$_))[2],split(/\n/,$content));
     }
 
     my @songs = ();
