@@ -15,6 +15,7 @@ use warnings;
 use XML::Simple;
 use LWP::Simple;
 use Audio::MPD;
+use URI::Escape;
 
 $| = 42;
 
@@ -49,18 +50,14 @@ my $current     = $mpd->current;
 
 unless ($CLEAR or $CROP) {
     my @old_songs = $mpd->playlist->as_items;
-    if ($SIZE < @old_songs) {
-        print "there are already $SIZE or more songs in the playlist\n";
-        exit;
-    }
+    $SIZE+=scalar(@old_songs);
     foreach my $song (@old_songs) {
         $PLAYLIST{$$song{file}} = 1;
     }
 }
 
 $PLAYLIST{$$current{file}} = 1;
-
-while ($SIZE >= scalar(keys %PLAYLIST)) {
+while (scalar(keys %PLAYLIST) < $SIZE) {
     my @playlist = keys %PLAYLIST;
     fisher_yates_shuffle(\@playlist);
     my $file = pop(@playlist);
@@ -94,7 +91,7 @@ while ($SIZE >= scalar(keys %PLAYLIST)) {
         my $info = $mpd->collection->song($new_song);
         my $new_artist = $$info{artist};
         my $new_title  = $$info{title};
-        print "\t...$new_artist - $new_title\n";
+    #    print "\t...$new_artist - $new_title\n";
     }
 }
 
@@ -131,8 +128,12 @@ sub get_sim_tracks {
     my $key     =   shift;
     my $mpd     =   shift;
 
-    my $params = "&artist=$artist&track=$track&limit=$limit&api_key=$key";
+    my $sartist = uri_escape($artist);
+    my $strack  = uri_escape($track);
+    my $params = "&artist=$sartist&track=$strack&limit=$limit&api_key=$key";
+
     my $xml = new XML::Simple;
+    print "$TRACK_URL$params\n";
     my $results = $xml->XMLin(get("$TRACK_URL$params"));
 
     my @similar = ();
@@ -144,6 +145,12 @@ sub get_sim_tracks {
                 push(@similar,"$artist$DELIMITER$title");
             }
         }
+    }
+    # check to see if this is some unknown-by-scrobbler variant of a 'base'
+    # track... i.e. the track title is something like 'Blah (Accoustic)'
+    if ((scalar(@similar) == 0) and ($track =~ /\s*\(.*\)$/)) {
+        $track =~ s/\s*\(.*\)$//;
+        return get_sim_tracks($artist,$track,$limit,$key,$mpd);
     }
 
     my @finds = ();
@@ -160,11 +167,13 @@ sub get_sim_artists {
     my $limit   =   shift;
     my $key     =   shift;
     my $mpd     =   shift;
+
+    my $sartist = uri_escape($artist);
     
     my @similar = ( $artist );
 
     if ($key and $key ne '') {
-        my $params = "&artist=$artist&limit=$limit&api_key=$key";
+        my $params = "&artist=$sartist&limit=$limit&api_key=$key";
         my $xml = new XML::Simple;
         my $results = $xml->XMLin(get("$ARTIST_URL$params"));
         
@@ -175,7 +184,7 @@ sub get_sim_artists {
         }
     } else {
         my $url = $ARTIST_ALT;
-        $url =~ s/ARTIST/$artist/;
+        $url =~ s/ARTIST/$sartist/;
         my @lines = split(/\n/,get($url));
 
         # map basically generates an array by applying the 'split' to each
@@ -191,6 +200,7 @@ sub get_sim_artists {
     }
     return map($_->file,@songs);
 }
+
 
 sub fisher_yates_shuffle {
     my $array = shift;
@@ -209,8 +219,12 @@ sub find_local_songs {
     my @finds = ();
     foreach my $song (@songs_to_find) {
         my ($artist,$title) = split(/$DELIMITER/,$song);
-        my @songs_by_artist = $mpd->collection->songs_by_artist($artist);
-        push(@finds,grep { /$title/ } @songs_by_artist);
+        my %songs_by_artist = map { $_{title} => $_{file} }
+            $mpd->collection->songs_by_artist($artist);
+
+        foreach my $key (grep { /^$title$/ } keys %songs_by_artist) {
+            push(@finds,$songs_by_artist{$key});
+        }
     }
-    return map($_->file,@finds);
+    return @finds;
 }
