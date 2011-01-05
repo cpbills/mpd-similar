@@ -36,6 +36,8 @@ my $MPD_PASS    = '';
 
 $SIZE = $ARGV[0] if ($ARGV[0] =~ /[0-9]+/);
 
+open FILE,">/tmp/mpd-similar.log";
+
 my $mpd = Audio::MPD->new(host      =>  $MPD_HOST,
                           port      =>  $MPD_PORT,
                           password  =>  $MPD_PASS);
@@ -91,7 +93,6 @@ while (scalar(keys %PLAYLIST) < $SIZE) {
         my $info = $mpd->collection->song($new_song);
         my $new_artist = $$info{artist};
         my $new_title  = $$info{title};
-    #    print "\t...$new_artist - $new_title\n";
     }
 }
 
@@ -114,12 +115,15 @@ fisher_yates_shuffle(\@files);
 foreach my $file (@files) {
     my $info = $mpd->collection->song($file);
     $mpd->playlist->add($file);
+    print FILE '$mpd->playlist->add('.$file.');'."\n";
     my $artist = $$info{artist};
     my $title  = $$info{title};
     print "\t$artist - $title\n";
 }
 
 $mpd->play if ($CLEAR);
+
+close FILE;
 
 sub get_sim_tracks {
     my $artist  =   shift;
@@ -153,17 +157,24 @@ sub get_sim_tracks {
     # check to see if this is some unknown-by-scrobbler variant of a 'base'
     # track... i.e. the track title is something like 'Blah (Accoustic)'
     if ((scalar(@similar) == 0) and ($track =~ /\s*\(.*\)$/)) {
+        print FILE "$artist - $track retrying as ";
         $track =~ s/\s*\(.*\)$//;
+        print FILE "$artist - $track\n";
         return get_sim_tracks($artist,$track,$limit,$key,$mpd);
     }
 
     my @finds = ();
     foreach my $song (@similar) {
         my ($artist,$title) = split(/$DELIMITER/,$song);
-        my @songs_by_artist = $mpd->collection->songs_by_artist($artist);
-        push(@finds,grep { /$title/ } @songs_by_artist);
+        my %songs_by_artist = map { $_{title} => $_{file} }
+            $mpd->collection->songs_by_artist($artist);
+
+        foreach my $key (grep { /^$title$/ } keys %songs_by_artist) {
+            print FILE "found: $artist - $key : $songs_by_artist{$key}\n";
+            push(@finds,$songs_by_artist{$key});
+        }
     }
-    return map($_->file,@finds);
+    return @finds;
 }
 
 sub get_sim_artists {
@@ -208,10 +219,10 @@ sub get_sim_artists {
     my @songs = ();
     foreach my $s_artist (@similar) {
         push(@songs,$mpd->collection->songs_by_artist($s_artist));
+        print FILE "added songs_by_artist: $s_artist to array\n";
     }
-    return map($_->file,@songs);
+    return map($_{file},@songs);
 }
-
 
 sub fisher_yates_shuffle {
     my $array = shift;
@@ -221,21 +232,4 @@ sub fisher_yates_shuffle {
         next if $i == $j;
         @$array[$i,$j] = @$array[$j,$i];
     }
-}
-
-sub find_local_songs {
-    my $mpd = shift;
-    my @songs_to_find = @_;
-
-    my @finds = ();
-    foreach my $song (@songs_to_find) {
-        my ($artist,$title) = split(/$DELIMITER/,$song);
-        my %songs_by_artist = map { $_{title} => $_{file} }
-            $mpd->collection->songs_by_artist($artist);
-
-        foreach my $key (grep { /^$title$/ } keys %songs_by_artist) {
-            push(@finds,$songs_by_artist{$key});
-        }
-    }
-    return @finds;
 }
