@@ -24,17 +24,16 @@ my $KEY         = 'api key goes here';
 my $TRACK_URL   = 'http://ws.audioscrobbler.com/2.0/?method=track.getsimilar';
 my $ARTIST_URL  = 'http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar';
 my $ARTIST_ALT  = 'http://ws.audioscrobbler.com/2.0/artist/ARTIST/similar.txt';
-my $T_LIMIT     = 50;
-my $A_LIMIT     = 20;
+my $T_LIMIT     = 200;
+my $A_LIMIT     = 40;
 my $DELIMITER   = '';
 
 my $MPD_HOST    = 'localhost';
 my $MPD_PORT    = '6600';
 my $MPD_PASS    = '';
+$| = 1;
 
 $SIZE = $ARGV[0] if ($ARGV[0] =~ /[0-9]+/);
-
-open FILE,">>/tmp/mpd-similar.log";
 
 my $mpd = Audio::MPD->new(host      =>  $MPD_HOST,
                           port      =>  $MPD_PORT,
@@ -78,20 +77,21 @@ while (scalar(keys %PLAYLIST) < $SIZE) {
         # similar tracks yeilded no results.
         @songs = get_sim_artists($artist,$A_LIMIT,$KEY,$mpd) if (@songs == 0);
     }
-    $SIMILAR{$file} = \@songs;
+    @{$SIMILAR{$file}} = @songs;
 
     fisher_yates_shuffle(\@songs);
     
     my $new_one = 0;
-    while (@songs and $new_one == 0) {
-        print FILE '@songs is: ' . scalar(@songs) . "\n";
-        my $new_song = pop(@songs);
-        $new_one = 1 unless $PLAYLIST{$new_song};
-        $PLAYLIST{$new_song} = 1;
+    if (@songs) {
+        while (@songs and $new_one == 0) {
+            my $new_song = pop(@songs);
+            $new_one = 1 unless $PLAYLIST{$new_song};
+            $PLAYLIST{$new_song} = 1;
 
-        my $info = $mpd->collection->song($new_song);
-        my $new_artist = $$info{artist};
-        my $new_title  = $$info{title};
+            my $info = $mpd->collection->song($new_song);
+            my $new_artist = $$info{artist};
+            my $new_title  = $$info{title};
+        }
     }
 }
 
@@ -114,15 +114,12 @@ fisher_yates_shuffle(\@files);
 foreach my $file (@files) {
     my $info = $mpd->collection->song($file);
     $mpd->playlist->add($file);
-    print FILE '$mpd->playlist->add('.$file.');'."\n";
     my $artist = $$info{artist};
     my $title  = $$info{title};
     print "\t$artist - $title\n";
 }
 
 $mpd->play if ($CLEAR);
-
-close FILE;
 
 sub get_sim_tracks {
     my $artist  =   shift;
@@ -136,7 +133,7 @@ sub get_sim_tracks {
     my $params = "&artist=$sartist&track=$strack&limit=$limit&api_key=$key";
 
     my $content = get("$TRACK_URL$params");
-    unless (defined $content) {
+    unless ($content) {
         print "failed to get: $TRACK_URL$params\n";
         return undef;
     }
@@ -156,9 +153,7 @@ sub get_sim_tracks {
     # check to see if this is some unknown-by-scrobbler variant of a 'base'
     # track... i.e. the track title is something like 'Blah (Accoustic)'
     if ((scalar(@similar) == 0) and ($track =~ /\s*\(.*\)$/)) {
-        print FILE "$artist - $track retrying as ";
         $track =~ s/\s*\(.*\)$//;
-        print FILE "$artist - $track\n";
         return get_sim_tracks($artist,$track,$limit,$key,$mpd);
     }
 
@@ -168,8 +163,9 @@ sub get_sim_tracks {
 
         my %songs_by_artist = map { $_->title, $_->file }
             $mpd->collection->songs_by_artist($artist);
-
-        foreach my $key (grep { /^$title$/ } keys %songs_by_artist) {
+        my $safe_title = $title;
+        $safe_title =~ s/([\$\@\%\&\(\)\[\]\{\}\\])/\\$1/g;
+        foreach my $key (grep { /^$safe_title$/ } keys %songs_by_artist) {
             push(@finds,$songs_by_artist{$key});
         }
     }
@@ -189,7 +185,7 @@ sub get_sim_artists {
     if ($key and $key ne '') {
         my $params = "&artist=$sartist&limit=$limit&api_key=$key";
         my $content = get("$ARTIST_URL$params");
-        unless (defined $content) {
+        unless ($content) {
             print "failed to get: $ARTIST_URL$params\n";
             return undef;
         }
@@ -204,7 +200,7 @@ sub get_sim_artists {
         my $url = $ARTIST_ALT;
         $url =~ s/ARTIST/$sartist/;
         my $content = get($url);
-        unless (defined $content) {
+        unless ($content) {
             print "failed to get: $url\n";
             return undef;
         }
@@ -218,7 +214,6 @@ sub get_sim_artists {
     my @songs = ();
     foreach my $s_artist (@similar) {
         push(@songs,$mpd->collection->songs_by_artist($s_artist));
-        print FILE "added songs_by_artist: $s_artist to array\n";
     }
     return map($_->file,@songs);
 }
