@@ -114,14 +114,13 @@ sub get_similar {
         # pain in the ass, and a lot of extra code.
         my $dbh = db_connect();
         my $now = time;
-        my $sql = qq{select last_update,similar from song_info where song = ?};
-        my $sth = $dbh->prepare($sql);
-        $sth->execute($file);
-        my ($last,$similar) = $sth->fetchrow_array;
+        my $fileq = $dbh->quote($file);
+        my $select = qq{ select last_update,similar from song_info
+                            where song = $fileq };
+        my ($last,$similar) = $dbh->selectrow_array($select);
         # use the results if they aren't expired
         push(@songs,split(/$DELIMITER/,$similar))
-            if ($last and $similar and ($now - $last) < $MAX_AGE);
-        $sth->finish;
+            if ($last and $similar and (($now - $last) < $MAX_AGE));
         $dbh->disconnect;
     }
     #@songs = @{$SIMILAR{$file}} if ($file and $SIMILAR{$file});
@@ -143,23 +142,18 @@ sub get_similar {
     if ($file and $updated) {
         my $dbh = db_connect();
         my $now = time;
-        my $similar = join $DELIMITER, @songs;
-        my $sql = qq{ select song_id from song_info where song = ? };
-        my $sth = $dbh->prepare($sql);
-           $sth->execute($file);
-        my ($song_id) = $sth->fetchrow_array;
+        my $fileq = $dbh->quote($file);
+        my $similarq = $dbh->quote(join $DELIMITER, @songs);
+        my $select = qq{ select song_id from song_info where song = $fileq };
+        my ($song_id) = $dbh->selectrow_array($select);
         if ($song_id) {
-            my $sql = qq{ update song_info set last_update = ?, similar = ?
-                            where song_id = ? };
-            my $sth = $dbh->prepare($sql);
-               $sth->execute($now,$similar,$song_id);
-               $sth->finish;
+            my $update = qq{ update song_info set last_update = $now,
+                             similar = $similarq where song_id = $song_id };
+            $dbh->do($update);
         } else {
-            my $sql = qq{ insert into song_info (song,similar,last_update)
-                            values ( ?, ?, ? ) };
-            my $sth = $dbh->prepare($sql);
-               $sth->execute($file,$similar,$now);
-               $sth->finish;
+            my $insert = qq{ insert into song_info (song,similar,last_update)
+                            values ($fileq, $similarq, $now) };
+            $dbh->do($insert);
         }
         $dbh->disconnect;
     }
@@ -194,7 +188,7 @@ sub get_similar_tracks {
     my $content = get("$TRACK_URL$params");
     unless ($content) {
         print "failed to get: $TRACK_URL$params\n";
-        return undef;
+        return;
     }
     my $xml = new XML::Simple;
     my $results = $xml->XMLin($content);
