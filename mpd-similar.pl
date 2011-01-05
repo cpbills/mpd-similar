@@ -17,8 +17,6 @@ use LWP::Simple;
 use Audio::MPD;
 use URI::Escape;
 
-$| = 42;
-
 my $SIZE        = 100;
 my $CROP        = 0;
 my $CLEAR       = 0;
@@ -36,7 +34,7 @@ my $MPD_PASS    = '';
 
 $SIZE = $ARGV[0] if ($ARGV[0] =~ /[0-9]+/);
 
-open FILE,">/tmp/mpd-similar.log";
+open FILE,">>/tmp/mpd-similar.log";
 
 my $mpd = Audio::MPD->new(host      =>  $MPD_HOST,
                           port      =>  $MPD_PORT,
@@ -86,6 +84,7 @@ while (scalar(keys %PLAYLIST) < $SIZE) {
     
     my $new_one = 0;
     while (@songs and $new_one == 0) {
+        print FILE '@songs is: ' . scalar(@songs) . "\n";
         my $new_song = pop(@songs);
         $new_one = 1 unless $PLAYLIST{$new_song};
         $PLAYLIST{$new_song} = 1;
@@ -166,11 +165,11 @@ sub get_sim_tracks {
     my @finds = ();
     foreach my $song (@similar) {
         my ($artist,$title) = split(/$DELIMITER/,$song);
-        my %songs_by_artist = map { $_{title} => $_{file} }
+
+        my %songs_by_artist = map { $_->title, $_->file }
             $mpd->collection->songs_by_artist($artist);
 
         foreach my $key (grep { /^$title$/ } keys %songs_by_artist) {
-            print FILE "found: $artist - $key : $songs_by_artist{$key}\n";
             push(@finds,$songs_by_artist{$key});
         }
     }
@@ -221,7 +220,7 @@ sub get_sim_artists {
         push(@songs,$mpd->collection->songs_by_artist($s_artist));
         print FILE "added songs_by_artist: $s_artist to array\n";
     }
-    return map($_{file},@songs);
+    return map($_->file,@songs);
 }
 
 sub fisher_yates_shuffle {
