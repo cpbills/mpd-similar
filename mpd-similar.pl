@@ -17,27 +17,46 @@ use LWP::Simple;
 use Audio::MPD;
 use URI::Escape;
 
-my $SIZE        = 100;
-my $CROP        = 0;
-my $CLEAR       = 0;
+my $SIZE        = 10;   # number of tracks to try to add, by default
+   $SIZE        = $ARGV[0] if ($ARGV[0] && $ARGV[0] =~ /[0-9]+/);
+my $CROP        = 0;    # leave the current song and remove everything else
+my $CLEAR       = 0;    # completely clear the playlist
+my $AUTOPLAY    = 1;    # attempt to resume / start play after adding a song
+my $SHUFFLE     = 0;    # shuffle playlist after each song is added.
+
 my $KEY         = 'api key goes here';
 my $TRACK_URL   = 'http://ws.audioscrobbler.com/2.0/?method=track.getsimilar';
 my $ARTIST_URL  = 'http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar';
 my $ARTIST_ALT  = 'http://ws.audioscrobbler.com/2.0/artist/ARTIST/similar.txt';
-my $T_LIMIT     = 200;
-my $A_LIMIT     = 40;
-my $DELIMITER   = '';
+my $T_LIMIT     = 100;  # number of similar tracks to limit our search to
+my $A_LIMIT     = 30;   # number of similar artists to limit our search to
+my $DELIMITER   = ''; # ctrl-_ is a useful delimiter
 
 my $MPD_HOST    = 'localhost';
 my $MPD_PORT    = '6600';
 my $MPD_PASS    = '';
-$| = 1;
 
-$SIZE = $ARGV[0] if ($ARGV[0] =~ /[0-9]+/);
+my $artist      = '';
+my $title       = '';
 
-my $mpd = Audio::MPD->new(host      =>  $MPD_HOST,
-                          port      =>  $MPD_PORT,
-                          password  =>  $MPD_PASS);
+# TODO: Getopts or Getopts::Long to allow/accept artist/title on command line
+# and mpd config options...
+
+my $MPD         = Audio::MPD->new(host      =>  $MPD_HOST,
+                                  port      =>  $MPD_PORT,
+                                  password  =>  $MPD_PASS);
+
+my $current     = $MPD->song;
+if ($current) {
+    $artist     = $$current{artist};
+    $title      = $$current{title};
+}
+
+# we don't NEED a title to go with the artist, but we /do/ need $artist
+unless ($artist) {
+    print "no artist information provided or available from mpd playlist";
+    exit 1;
+}
 
 # playlist hash holds the playlist, we can easily check for collisions when
 # adding new tracks. the similar hash will hold the results found from looking
@@ -45,10 +64,8 @@ my $mpd = Audio::MPD->new(host      =>  $MPD_HOST,
 my %PLAYLIST    = ();
 my %SIMILAR     = ();
 
-my $current     = $mpd->current;
-
 unless ($CLEAR or $CROP) {
-    my @old_songs = $mpd->playlist->as_items;
+    my @old_songs = $MPD->playlist->as_items;
     $SIZE+=scalar(@old_songs);
     foreach my $song (@old_songs) {
         $PLAYLIST{$$song{file}} = 1;
@@ -61,7 +78,7 @@ while (scalar(keys %PLAYLIST) < $SIZE) {
     fisher_yates_shuffle(\@playlist);
     my $file = pop(@playlist);
     
-    my $song = $mpd->collection->song($file);
+    my $song = $MPD->collection->song($file);
     my $artist  = $$song{artist};
     my $track   = $$song{title};
 
@@ -71,11 +88,11 @@ while (scalar(keys %PLAYLIST) < $SIZE) {
     @songs = @{$SIMILAR{$file}} if ($SIMILAR{$file});
     if (@songs == 0) {
         # we have an API key, we can find similar tracks, not just artists!
-        @songs = get_sim_tracks($artist,$track,$T_LIMIT,$KEY,$mpd) if ($KEY);
+        @songs = get_sim_tracks($artist,$track,$T_LIMIT,$KEY) if ($KEY);
 
         # find songs using only similar artist if the search for
         # similar tracks yeilded no results.
-        @songs = get_sim_artists($artist,$A_LIMIT,$KEY,$mpd) if (@songs == 0);
+        @songs = get_sim_artists($artist,$A_LIMIT,$KEY) if (@songs == 0);
     }
     @{$SIMILAR{$file}} = @songs;
 
@@ -88,7 +105,7 @@ while (scalar(keys %PLAYLIST) < $SIZE) {
             $new_one = 1 unless $PLAYLIST{$new_song};
             $PLAYLIST{$new_song} = 1;
 
-            my $info = $mpd->collection->song($new_song);
+            my $info = $MPD->collection->song($new_song);
             my $new_artist = $$info{artist};
             my $new_title  = $$info{title};
         }
@@ -98,11 +115,11 @@ while (scalar(keys %PLAYLIST) < $SIZE) {
 delete $PLAYLIST{$$current{file}} unless ($CLEAR);
 
 if ($CROP) {
-    $mpd->playlist->crop;
+    $MPD->playlist->crop;
 } elsif ($CLEAR) {
-    $mpd->playlist->clear;
+    $MPD->playlist->clear;
 } else {
-    my @old_songs = $mpd->playlist->as_items;
+    my @old_songs = $MPD->playlist->as_items;
     foreach my $song (@old_songs) {
         delete $PLAYLIST{$$song{file}};
     }
@@ -112,21 +129,20 @@ print "playlist:\n";
 my @files = keys %PLAYLIST;
 fisher_yates_shuffle(\@files);
 foreach my $file (@files) {
-    my $info = $mpd->collection->song($file);
-    $mpd->playlist->add($file);
+    my $info = $MPD->collection->song($file);
+    $MPD->playlist->add($file);
     my $artist = $$info{artist};
     my $title  = $$info{title};
     print "\t$artist - $title\n";
 }
 
-$mpd->play if ($CLEAR);
+$MPD->play if ($CLEAR);
 
 sub get_sim_tracks {
     my $artist  =   shift;
     my $track   =   shift;
     my $limit   =   shift;
     my $key     =   shift;
-    my $mpd     =   shift;
 
     my $sartist = uri_escape($artist);
     my $strack  = uri_escape($track);
@@ -154,7 +170,7 @@ sub get_sim_tracks {
     # track... i.e. the track title is something like 'Blah (Accoustic)'
     if ((scalar(@similar) == 0) and ($track =~ /\s*\(.*\)$/)) {
         $track =~ s/\s*\(.*\)$//;
-        return get_sim_tracks($artist,$track,$limit,$key,$mpd);
+        return get_sim_tracks($artist,$track,$limit,$key);
     }
 
     my @finds = ();
@@ -162,7 +178,7 @@ sub get_sim_tracks {
         my ($artist,$title) = split(/$DELIMITER/,$song);
 
         my %songs_by_artist = map { $_->title, $_->file }
-            $mpd->collection->songs_by_artist($artist);
+            $MPD->collection->songs_by_artist($artist);
         my $safe_title = $title;
         $safe_title =~ s/([\$\@\%\&\(\)\[\]\{\}\\])/\\$1/g;
         foreach my $key (grep { /^$safe_title$/ } keys %songs_by_artist) {
@@ -176,7 +192,6 @@ sub get_sim_artists {
     my $artist  =   shift;
     my $limit   =   shift;
     my $key     =   shift;
-    my $mpd     =   shift;
 
     my $sartist = uri_escape($artist);
     
@@ -213,7 +228,7 @@ sub get_sim_artists {
 
     my @songs = ();
     foreach my $s_artist (@similar) {
-        push(@songs,$mpd->collection->songs_by_artist($s_artist));
+        push(@songs,$MPD->collection->songs_by_artist($s_artist));
     }
     return map($_->file,@songs);
 }
