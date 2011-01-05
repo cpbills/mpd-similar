@@ -16,6 +16,7 @@ use XML::Simple;
 use LWP::Simple;
 use Audio::MPD;
 use URI::Escape;
+use DBI;
 
 my $SIZE        = 10;   # number of tracks to try to add, by default
    $SIZE        = $ARGV[0] if ($ARGV[0] && $ARGV[0] =~ /[0-9]+/);
@@ -28,13 +29,20 @@ my $KEY         = 'api key goes here';
 my $TRACK_URL   = 'http://ws.audioscrobbler.com/2.0/?method=track.getsimilar';
 my $ARTIST_URL  = 'http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar';
 my $ARTIST_ALT  = 'http://ws.audioscrobbler.com/2.0/artist/ARTIST/similar.txt';
-my $T_LIMIT     = 100;  # number of similar tracks to limit our search to
-my $A_LIMIT     = 30;   # number of similar artists to limit our search to
+my $T_LIMIT     = 200;  # number of similar tracks to limit our search to
+my $A_LIMIT     = 20;   # number of similar artists to limit our search to
 my $DELIMITER   = ''; # ctrl-_ is a useful delimiter
+my $MAX_AGE     = 4*24*60*60; # 4 days should be a good start to check this out
 
 my $MPD_HOST    = 'localhost';
 my $MPD_PORT    = '6600';
 my $MPD_PASS    = '';
+
+my $SQL_HOST    = 'localhost';
+my $SQL_PORT    = '3306';
+my $SQL_DB      = 'similarity';
+my $SQL_USER    = 'similarity';
+my $SQL_PASS    = 'similarity';
 
 my $artist      = '';
 my $title       = '';
@@ -53,7 +61,6 @@ if ($current) {
     $title      = $$current{title};
     $file       = $$current{file};
 }
-
 # we don't NEED a title to go with the artist, but we /do/ need $artist
 unless ($artist) {
     print "no artist information provided or available from mpd playlist";
@@ -77,6 +84,9 @@ while (scalar(keys %PLAYLIST) < $SIZE) {
     my $song = get_similar($artist,$title,$file);
     if ($song) {
         $MPD->playlist->add($song);
+        $song = $MPD->collection->song($song);
+        print "Added " . $$song{artist} . ' - ' . $$song{title} . "\n";
+        $MPD->playlist->shuffle if ($SHUFFLE);
         $MPD->play unless ($MPD->status->state eq 'play' or !$AUTOPLAY);
     }
 
@@ -98,8 +108,24 @@ sub get_similar {
     my $file    = shift;
 
     my @songs   = ();
-    @songs = @{$SIMILAR{$file}} if ($file and $SIMILAR{$file});
-    if (scalar(@songs) == 0) {
+    my $updated = 0;
+    if ($file) {
+        # we're trying to do this the 'right' way, which is a
+        # pain in the ass, and a lot of extra code.
+        my $dbh = db_connect();
+        my $now = time;
+        my $sql = qq{select last_update,similar from song_info where song = ?};
+        my $sth = $dbh->prepare($sql);
+        $sth->execute($file);
+        my ($last,$similar) = $sth->fetchrow_array;
+        # use the results if they aren't expired
+        push(@songs,split(/$DELIMITER/,$similar))
+            if ($last and $similar and ($now - $last) < $MAX_AGE);
+        $sth->finish;
+        $dbh->disconnect;
+    }
+    #@songs = @{$SIMILAR{$file}} if ($file and $SIMILAR{$file});
+    unless (@songs and scalar(@songs) > 0) {
         # if we have an api key and the track name, we can look for
         # similar tracks, and not just similar artists...
         @songs = get_similar_tracks($artist,$title,$T_LIMIT,$KEY)
@@ -108,25 +134,51 @@ sub get_similar {
         # if @songs is still void, we'll search by artist only
         # takes $KEY as a param, but is not required to work
         @songs = get_similar_artists($artist,$A_LIMIT,$KEY)
-            if (scalar(@songs) == 0);
+            unless (@songs and scalar(@songs) > 0);
+
+        $updated = 1 if (@songs and scalar(@songs) > 0);
     }
     # store our results for this song so we don't have to search
     # in the future, generally a good thing for speeding things up
-    @{$SIMILAR{$file}} = @songs if ($file);
+    if ($file and $updated) {
+        my $dbh = db_connect();
+        my $now = time;
+        my $similar = join $DELIMITER, @songs;
+        my $sql = qq{ select song_id from song_info where song = ? };
+        my $sth = $dbh->prepare($sql);
+           $sth->execute($file);
+        my ($song_id) = $sth->fetchrow_array;
+        if ($song_id) {
+            my $sql = qq{ update song_info set last_update = ?, similar = ?
+                            where song_id = ? };
+            my $sth = $dbh->prepare($sql);
+               $sth->execute($now,$similar,$song_id);
+               $sth->finish;
+        } else {
+            my $sql = qq{ insert into song_info (song,similar,last_update)
+                            values ( ?, ?, ? ) };
+            my $sth = $dbh->prepare($sql);
+               $sth->execute($file,$similar,$now);
+               $sth->finish;
+        }
+        $dbh->disconnect;
+    }
+
+    #@{$SIMILAR{$file}} = @songs if ($file);
 
     # shuffle the array of found songs like a deck of cards
     fisher_yates_shuffle(\@songs);
 
-    my $found_new_song = 0;
-    my $new_song = '';
     if (@songs) {
-        while ((scalar(@songs) > 0) and !$found_new_song) {
-            $new_song = pop(@songs);
-            $found_new_song = 1 unless $PLAYLIST{$new_song};
-            $PLAYLIST{$new_song} = 1;
+        while (scalar(@songs) > 0) {
+            my $new_song = pop(@songs);
+            if ($new_song and !$PLAYLIST{$new_song}) {
+                $PLAYLIST{$new_song} = 1;
+                return $new_song;
+            }
         }
     }
-    return $new_song;
+    return 0;
 }
 
 sub get_similar_tracks {
@@ -183,9 +235,8 @@ sub get_similar_artists {
     my $artist  =   shift;
     my $limit   =   shift;
     my $key     =   shift;
-
     my $sartist = uri_escape($artist);
-    
+
     my @similar = ( $artist );
 
     if ($key and $key ne '') {
@@ -222,6 +273,12 @@ sub get_similar_artists {
         push(@songs,$MPD->collection->songs_by_artist($s_artist));
     }
     return map($_->file,@songs);
+}
+
+sub db_connect {
+    my $dsn = "dbi:mysql:$SQL_DB:$SQL_HOST:$SQL_PORT";
+    my $dbh = DBI->connect($dsn,$SQL_USER,$SQL_PASS,{ RaiseError => 1});
+    return $dbh;
 }
 
 sub fisher_yates_shuffle {
