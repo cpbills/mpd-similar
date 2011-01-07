@@ -67,6 +67,27 @@ unless ($artist) {
     exit 1;
 }
 
+# TODO:
+# new algorithm;
+# first song; find similar tracks, build database entries for that song
+# pick song from similar tracks, build database entries for that song
+# - pick based on match percent and age (last_played / last_added)
+# to make playlists smarter, build base from origin song, 5 tracks, if possible
+# then from that pool, pick a song, and pick the best match/oldest 2-3 times
+# then from the first pool, move on to song 2 of 5 or whatever... sort of
+# using a tier... which will hopefully reduce branching out so much
+# error handling for not having enough base songs, and keeping the base fresh
+# but similar will be a big part of the algorithm... also handling similar
+# artists instead of tracks will be a chore... since the similarity per-track
+# drops drastically based only on artist similarity.
+# table structure;
+# songs: song_id, file, last_add, last_update
+# matches: match_id, song_id, file, match (percent)
+# select file,match from matches where song_id = $id;
+# select last_add,last_update from songs where file = $file;
+
+print "Building playlist for $artist - $title\n";
+
 # the similar hash will hold the results found from looking for similar
 # tracks to reduce the lookup time while building the playlist.
 my %SIMILAR     = ();
@@ -130,12 +151,14 @@ sub get_similar {
         @songs = get_similar_tracks($artist,$title,$T_LIMIT,$KEY)
             if ($KEY and $title);
 
+        # we only want to store the results to our database if we got
+        # a song / artist hit... otherwise it could dillute the pool
+        $updated = 1 if (@songs and scalar(@songs) > 0);
+
         # if @songs is still void, we'll search by artist only
         # takes $KEY as a param, but is not required to work
         @songs = get_similar_artists($artist,$A_LIMIT,$KEY)
             unless (@songs and scalar(@songs) > 0);
-
-        $updated = 1 if (@songs and scalar(@songs) > 0);
     }
     # store our results for this song so we don't have to search
     # in the future, generally a good thing for speeding things up
