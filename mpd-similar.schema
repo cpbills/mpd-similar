@@ -1,0 +1,26 @@
+drop table if exists matches;
+create table matches (
+    match_id    int(11) unsigned not null auto_increment,
+    song_id     int(11) not null,
+    file        varchar(255),
+    percent     decimal(8,5),
+    primary key (match_id)
+);
+
+drop table if exists song_info;
+create table song_info (
+    song_id     int(11) unsigned not null auto_increment,
+    file        varchar(255),
+    last_update int(11),
+    similar     text,
+    primary key (song_id)
+);
+
+drop table if exists songs;
+create table songs (
+    song_id     int(10) unsigned not null auto_increment,
+    fole        varchar(255),
+    last_used   int(10) unsigned,
+    last_update int(10) unsigned,
+    primary key (song_id)
+);

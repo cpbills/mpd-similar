@@ -189,7 +189,7 @@ sub get_similar {
         my $now = time;
         my $fileq = $dbh->quote($file);
         my $select = qq{ select last_update,similar from song_info
-                            where song = $fileq };
+                            where file = $fileq };
         my ($last,$similar) = $dbh->selectrow_array($select);
         # use the results if they aren't expired
         push(@songs,split(/$DELIMITER/,$similar))
@@ -225,14 +225,14 @@ sub get_similar {
         my $now = time;
         my $fileq = $dbh->quote($file);
         my $similarq = $dbh->quote(join $DELIMITER, @songs);
-        my $select = qq{ select song_id from song_info where song = $fileq };
+        my $select = qq{ select song_id from song_info where file = $fileq };
         my ($song_id) = $dbh->selectrow_array($select);
         if ($song_id) {
             my $update = qq{ update song_info set last_update = $now,
                              similar = $similarq where song_id = $song_id };
             $dbh->do($update);
         } else {
-            my $insert = qq{ insert into song_info (song,similar,last_update)
+            my $insert = qq{ insert into song_info (file,similar,last_update)
                             values ($fileq, $similarq, $now) };
             $dbh->do($insert);
         }
